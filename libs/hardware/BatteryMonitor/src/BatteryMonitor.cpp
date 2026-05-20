@@ -1,13 +1,32 @@
 #include "BatteryMonitor.h"
-#include <esp_idf_version.h>
-#include <Arduino.h>
-#if ESP_IDF_VERSION_MAJOR < 5
-#include <esp_adc_cal.h>
-#endif
+#include <esp_adc/adc_cali_scheme.h>
+#include <algorithm>
+#include <cmath>
 
-BatteryMonitor::BatteryMonitor(uint8_t adcPin, float dividerMultiplier)
-  : _adcPin(adcPin), _dividerMultiplier(dividerMultiplier)
+BatteryMonitor::BatteryMonitor(adc_oneshot_unit_handle_t adcUnit, uint8_t adcChannel, float dividerMultiplier)
+    : _adcUnit(adcUnit), _adcChannel(adcChannel), _dividerMultiplier(dividerMultiplier),
+      _caliHandle(nullptr), _caliEnabled(false)
 {
+    adc_oneshot_chan_cfg_t chanCfg = {
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+    adc_oneshot_config_channel(_adcUnit, static_cast<adc_channel_t>(_adcChannel), &chanCfg);
+
+    adc_cali_curve_fitting_config_t caliCfg = {
+        .unit_id = ADC_UNIT_1,
+        .chan = static_cast<adc_channel_t>(_adcChannel),
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+    _caliEnabled = (adc_cali_create_scheme_curve_fitting(&caliCfg, &_caliHandle) == ESP_OK);
+}
+
+BatteryMonitor::~BatteryMonitor()
+{
+    if (_caliEnabled && _caliHandle) {
+        adc_cali_delete_scheme_curve_fitting(_caliHandle);
+    }
 }
 
 uint16_t BatteryMonitor::readPercentage() const
@@ -17,16 +36,18 @@ uint16_t BatteryMonitor::readPercentage() const
 
 uint16_t BatteryMonitor::readMillivolts() const
 {
-#if ESP_IDF_VERSION_MAJOR < 5
-    // ESP-IDF 4.x doesn't have analogReadMilliVolts, so we need to do the calibration manually
-    const uint16_t raw = analogRead(_adcPin);
-    esp_adc_cal_characteristics_t adc_chars;
-    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adc_chars);
-    const uint16_t mv = esp_adc_cal_raw_to_voltage(raw, &adc_chars);
-#else
-    // ESP-IDF 5.x has analogReadMilliVolts
-    const uint16_t mv = analogReadMilliVolts(_adcPin);
-#endif
+    if (!_adcUnit) {
+        return 0;
+    }
+    int raw = 0;
+    adc_oneshot_read(_adcUnit, static_cast<adc_channel_t>(_adcChannel), &raw);
+
+    int mv = 0;
+    if (_caliEnabled) {
+        adc_cali_raw_to_voltage(_caliHandle, raw, &mv);
+    } else {
+        mv = (raw * 3100) / 4095;
+    }
 
     return static_cast<uint16_t>(mv * _dividerMultiplier);
 }
@@ -45,9 +66,8 @@ uint16_t BatteryMonitor::percentageFromMillivolts(uint16_t millivolts)
                6158.8520 * volts +
                7501.3202;
 
-    // Clamp to [0,100] and round
     y = std::max(y, 0.0);
     y = std::min(y, 100.0);
     y = round(y);
-    return y;
+    return static_cast<uint16_t>(y);
 }
