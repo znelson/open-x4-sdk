@@ -10,5 +10,5 @@
   ],
   "dependencies": {},
   "platforms": "espressif32",
-  "frameworks": ["arduino", "espidf"]
+  "frameworks": ["espidf"]
 }
