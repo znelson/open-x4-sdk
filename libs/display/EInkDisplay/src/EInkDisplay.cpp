@@ -1,8 +1,16 @@
 #include "EInkDisplay.h"
 
 #include <cstring>
+#include <driver/gpio.h>
+#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <fstream>
 #include <vector>
+
+static uint32_t now_ms() {
+  return static_cast<uint32_t>(esp_timer_get_time() / 1000);
+}
 
 // SSD1677 command definitions
 // Initialization and reset
@@ -41,7 +49,7 @@
 #define CMD_DEEP_SLEEP 0x10 // Deep sleep
 
 // Custom LUT for fast refresh (differential 3-pass mode, 12 frames)
-const unsigned char lut_grayscale[] PROGMEM = {
+const unsigned char lut_grayscale[] = {
     // 00 black/white
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     // 01 light gray
@@ -74,7 +82,7 @@ const unsigned char lut_grayscale[] PROGMEM = {
     // Reserved
     0x00, 0x00};
 
-const unsigned char lut_grayscale_revert[] PROGMEM = {
+const unsigned char lut_grayscale_revert[] = {
     // 00 black/white
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     // 10 gray
@@ -113,27 +121,27 @@ const unsigned char lut_grayscale_revert[] PROGMEM = {
 // fast-diff triggers reuse those registers, producing grey overlay artifacts.
 // Loading this bank before fast-diff overwrites the absolute waveforms with
 // differential B→W / W→B transitions, restoring clean page turns.
-const uint8_t lut_x3_vcom_full[] PROGMEM = {
+const uint8_t lut_x3_vcom_full[] = {
     0x00, 0x06, 0x02, 0x06, 0x06, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00,
     0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_ww_full[] PROGMEM = {
+const uint8_t lut_x3_ww_full[] = {
     0x20, 0x06, 0x02, 0x06, 0x06, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00,
     0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_bw_full[] PROGMEM = {
+const uint8_t lut_x3_bw_full[] = {
     0xAA, 0x06, 0x02, 0x06, 0x06, 0x01, 0x80, 0x05, 0x01, 0x00, 0x00,
     0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_wb_full[] PROGMEM = {
+const uint8_t lut_x3_wb_full[] = {
     0x55, 0x06, 0x02, 0x06, 0x06, 0x01, 0x40, 0x05, 0x01, 0x00, 0x00,
     0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_bb_full[] PROGMEM = {
+const uint8_t lut_x3_bb_full[] = {
     0x10, 0x06, 0x02, 0x06, 0x06, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00,
     0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -141,27 +149,27 @@ const uint8_t lut_x3_bb_full[] PROGMEM = {
 
 // X3 turbo LUTs from papyrix-reader: same voltage patterns as full,
 // shortened timing for fast differential updates.
-const uint8_t lut_x3_vcom_turbo[] PROGMEM = {
+const uint8_t lut_x3_vcom_turbo[] = {
     0x00, 0x04, 0x02, 0x04, 0x04, 0x01, 0x00, 0x04, 0x01, 0x00, 0x00,
     0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_ww_turbo[] PROGMEM = {
+const uint8_t lut_x3_ww_turbo[] = {
     0x20, 0x04, 0x02, 0x04, 0x04, 0x01, 0x00, 0x04, 0x01, 0x00, 0x00,
     0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_bw_turbo[] PROGMEM = {
+const uint8_t lut_x3_bw_turbo[] = {
     0xAA, 0x04, 0x02, 0x04, 0x04, 0x01, 0x80, 0x04, 0x01, 0x00, 0x00,
     0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_wb_turbo[] PROGMEM = {
+const uint8_t lut_x3_wb_turbo[] = {
     0x55, 0x04, 0x02, 0x04, 0x04, 0x01, 0x40, 0x04, 0x01, 0x00, 0x00,
     0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_bb_turbo[] PROGMEM = {
+const uint8_t lut_x3_bb_turbo[] = {
     0x10, 0x04, 0x02, 0x04, 0x04, 0x01, 0x00, 0x04, 0x01, 0x00, 0x00,
     0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -173,32 +181,32 @@ const uint8_t lut_x3_bb_turbo[] PROGMEM = {
 // GRAYSCALE encoding cell mapping: BB=no change, WW=dark gray, BW=medium gray.
 // WB is never selected by GRAYSCALE encoding but populated with state 01
 // (light gray) for completeness.
-const uint8_t lut_x3_vcom_gray[] PROGMEM = {
+const uint8_t lut_x3_vcom_gray[] = {
     0x00, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_ww_gray[] PROGMEM = {
+const uint8_t lut_x3_ww_gray[] = {
     // State 11 (dark gray): single phase, weak drive matching original X3
     // behavior
     0x20, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_bw_gray[] PROGMEM = {
+const uint8_t lut_x3_bw_gray[] = {
     // State 10 (medium gray): single phase, moderate drive matching original X3
     // behavior
     0x80, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_wb_gray[] PROGMEM = {
+const uint8_t lut_x3_wb_gray[] = {
     // State 01 (light gray): single phase, X4 VS[0] = 0x54 — never selected
     0x54, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_bb_gray[] PROGMEM = {
+const uint8_t lut_x3_bb_gray[] = {
     // State 00 (no change): VS = 0x00 — pixels stay at their existing BW state
     0x00, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -220,27 +228,27 @@ const uint8_t lut_x3_bb_gray[] PROGMEM = {
 //
 // Used by displayBuffer() for OEM full-sync image refresh, and by
 // displayGrayBuffer() for 4-level grayscale rendering.
-const uint8_t lut_x3_vcom_img[] PROGMEM = {
+const uint8_t lut_x3_vcom_img[] = {
     0x00, 0x08, 0x0B, 0x02, 0x03, 0x01, 0x00, 0x0C, 0x02, 0x07, 0x02,
     0x01, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_ww_img[] PROGMEM = {
+const uint8_t lut_x3_ww_img[] = {
     0xA8, 0x08, 0x0B, 0x02, 0x03, 0x01, 0x44, 0x0C, 0x02, 0x07, 0x02,
     0x01, 0x04, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_bw_img[] PROGMEM = {
+const uint8_t lut_x3_bw_img[] = {
     0x80, 0x08, 0x0B, 0x02, 0x03, 0x01, 0x62, 0x0C, 0x02, 0x07, 0x02,
     0x01, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_wb_img[] PROGMEM = {
+const uint8_t lut_x3_wb_img[] = {
     0x88, 0x08, 0x0B, 0x02, 0x03, 0x01, 0x60, 0x0C, 0x02, 0x07, 0x02,
     0x01, 0x00, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-const uint8_t lut_x3_bb_img[] PROGMEM = {
+const uint8_t lut_x3_bb_img[] = {
     0x00, 0x08, 0x0B, 0x02, 0x03, 0x01, 0x4A, 0x0C, 0x02, 0x07, 0x02,
     0x01, 0x88, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -271,7 +279,7 @@ void EInkDisplay::requestResync(uint8_t settlePasses) {
 
 // Fast mode (LUT1): 60 waveform frames, FR=0x44, VCOM=-2.0V.
 // Used for XTH reading in container mode. ~40% faster than quality mode.
-const unsigned char lut_factory_fast[] PROGMEM = {
+const unsigned char lut_factory_fast[] = {
     // VS patterns (LUT0-LUT3 + VCOM), 10 bytes each
     0x00, 0x4A, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, // LUT0: state 00 (black)
@@ -301,7 +309,7 @@ const unsigned char lut_factory_fast[] PROGMEM = {
 // Quality mode (LUT2): 50 waveform frames, FR=0x22, VCOM=-1.2V.
 // Used for standalone XTH wallpapers/covers. Less ghosting, ~67% slower than
 // fast mode.
-const unsigned char lut_factory_quality[] PROGMEM = {
+const unsigned char lut_factory_quality[] = {
     // VS patterns (LUT0-LUT3 + VCOM), 10 bytes each
     0x00, 0x4A, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, // LUT0: state 00 (black)
@@ -337,17 +345,16 @@ EInkDisplay::EInkDisplay(int8_t sclk, int8_t mosi, int8_t cs, int8_t dc,
       frameBufferActive(nullptr),
 #endif
       customLutActive(false) {
-  if (Serial)
-    Serial.printf("[%lu] EInkDisplay: Constructor called\n", millis());
-  if (Serial)
-    Serial.printf("[%lu]   SCLK=%d, MOSI=%d, CS=%d, DC=%d, RST=%d, BUSY=%d\n",
-                  millis(), sclk, mosi, cs, dc, rst, busy);
+}
+
+EInkDisplay::~EInkDisplay() {
+  if (_spi) {
+    spi_bus_remove_device(_spi);
+    _spi = nullptr;
+  }
 }
 
 void EInkDisplay::begin() {
-  if (Serial)
-    Serial.printf("[%lu] EInkDisplay: begin() called\n", millis());
-
   isScreenOn = false;
   customLutActive = false;
   inGrayscaleMode = false;
@@ -356,6 +363,7 @@ void EInkDisplay::begin() {
   frameBuffer = frameBuffer0;
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
   frameBufferActive = frameBuffer1;
+  memset(frameBuffer1, 0xFF, bufferSize);
 #endif
 
   // Initialize to white
@@ -365,48 +373,45 @@ void EInkDisplay::begin() {
   _x3ForceFullSyncNext = false;
   _x3ForcedConditionPassesNext = 0;
   _x3GrayState = {};
-#ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
-  if (Serial)
-    Serial.printf("[%lu]   Static frame buffer (%lu bytes)\n", millis(),
-                  bufferSize);
-#else
-  memset(frameBuffer1, 0xFF, bufferSize);
-  if (Serial)
-    Serial.printf("[%lu]   Static frame buffers (2 x %lu bytes)\n", millis(),
-                  bufferSize);
-#endif
 
-  if (Serial)
-    Serial.printf("[%lu]   Initializing e-ink display driver...\n", millis());
-
-  // Initialize SPI with custom pins
-  SPI.begin(_sclk, -1, _mosi, _cs);
+  // Add this device to the SPI bus (bus initialized by HalGPIO::begin())
   const uint32_t spiHz = _x3Mode ? 16000000 : 40000000;
-  spiSettings = SPISettings(spiHz, MSBFIRST, SPI_MODE0);
-  if (Serial)
-    Serial.printf("[%lu]   SPI initialized at %lu Hz, Mode 0\n", millis(),
-                  spiHz);
+  spi_device_interface_config_t devCfg = {};
+  devCfg.clock_speed_hz = static_cast<int>(spiHz);
+  devCfg.mode = 0;             // SPI_MODE0 (CPOL=0, CPHA=0), MSBFIRST by default
+  devCfg.spics_io_num = -1;    // software CS: we assert/deassert manually via GPIO
+  devCfg.queue_size = 1;
+  if (spi_bus_add_device(SPI2_HOST, &devCfg, &_spi) != ESP_OK) {
+    return;
+  }
 
   // Setup GPIO pins
-  pinMode(_cs, OUTPUT);
-  pinMode(_dc, OUTPUT);
-  pinMode(_rst, OUTPUT);
-  pinMode(_busy, INPUT);
+  const gpio_config_t outCfg = {
+    .pin_bit_mask = (1ULL << _cs) | (1ULL << _dc) | (1ULL << _rst),
+    .mode = GPIO_MODE_OUTPUT,
+    .pull_up_en = GPIO_PULLUP_DISABLE,
+    .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    .intr_type = GPIO_INTR_DISABLE,
+  };
+  gpio_config(&outCfg);
 
-  digitalWrite(_cs, HIGH);
-  digitalWrite(_dc, HIGH);
+  const gpio_config_t inCfg = {
+    .pin_bit_mask = (1ULL << _busy),
+    .mode = GPIO_MODE_INPUT,
+    .pull_up_en = GPIO_PULLUP_DISABLE,
+    .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    .intr_type = GPIO_INTR_DISABLE,
+  };
+  gpio_config(&inCfg);
 
-  if (Serial)
-    Serial.printf("[%lu]   GPIO pins configured\n", millis());
+  gpio_set_level((gpio_num_t)_cs, 1);
+  gpio_set_level((gpio_num_t)_dc, 1);
 
   // Reset display
   resetDisplay();
 
   // Initialize display controller
   initDisplayController();
-
-  if (Serial)
-    Serial.printf("[%lu]   E-ink display driver initialized\n", millis());
 }
 
 // ============================================================================
@@ -414,111 +419,118 @@ void EInkDisplay::begin() {
 // ============================================================================
 
 void EInkDisplay::resetDisplay() {
-  if (Serial)
-    Serial.printf("[%lu]   Resetting display...\n", millis());
-  digitalWrite(_rst, HIGH);
-  delay(20);
-  digitalWrite(_rst, LOW);
-  delay(2);
-  digitalWrite(_rst, HIGH);
-  delay(20);
-  if (Serial)
-    Serial.printf("[%lu]   Display reset complete\n", millis());
+  gpio_set_level((gpio_num_t)_rst, 1);
+  vTaskDelay(pdMS_TO_TICKS(20));
+  gpio_set_level((gpio_num_t)_rst, 0);
+  vTaskDelay(pdMS_TO_TICKS(2));
+  gpio_set_level((gpio_num_t)_rst, 1);
+  vTaskDelay(pdMS_TO_TICKS(20));
   if (_x3Mode) {
-    delay(50);
+    vTaskDelay(pdMS_TO_TICKS(50));
     return;
   }
 }
 
 void EInkDisplay::waitForRefresh(const char *comment) {
-  unsigned long start = millis();
+  const uint32_t start = now_ms();
   if (!_x3Mode) {
-    while (digitalRead(_busy) == HIGH) {
-      delay(1);
-      if (millis() - start > 30000)
+    while (gpio_get_level((gpio_num_t)_busy) == 1) {
+      vTaskDelay(pdMS_TO_TICKS(1));
+      if (now_ms() - start > 30000)
         break;
     }
   } else {
     bool sawLow = false;
-    while (digitalRead(_busy) == HIGH) {
-      delay(1);
-      if (millis() - start > 1000)
+    while (gpio_get_level((gpio_num_t)_busy) == 1) {
+      vTaskDelay(pdMS_TO_TICKS(1));
+      if (now_ms() - start > 1000)
         break;
     }
-    if (digitalRead(_busy) == LOW) {
+    if (gpio_get_level((gpio_num_t)_busy) == 0) {
       sawLow = true;
-      while (digitalRead(_busy) == LOW) {
-        delay(1);
-        if (millis() - start > 30000)
+      while (gpio_get_level((gpio_num_t)_busy) == 0) {
+        vTaskDelay(pdMS_TO_TICKS(1));
+        if (now_ms() - start > 30000)
           break;
       }
     }
     if (!sawLow)
       return;
   }
-  if (comment && Serial)
-    Serial.printf("[%lu]   Refresh done: %s (%lu ms)\n", millis(), comment,
-                  millis() - start);
+  (void)comment;
 }
 
 void EInkDisplay::sendCommand(uint8_t command) {
-  SPI.beginTransaction(spiSettings);
-  digitalWrite(_dc, LOW); // Command mode
-  digitalWrite(_cs, LOW); // Select chip
-  SPI.transfer(command);
-  digitalWrite(_cs, HIGH); // Deselect chip
-  SPI.endTransaction();
+  spi_transaction_t t = {};
+  t.length = 8;
+  t.flags = SPI_TRANS_USE_TXDATA;
+  t.tx_data[0] = command;
+  gpio_set_level((gpio_num_t)_dc, 0); // Command mode
+  gpio_set_level((gpio_num_t)_cs, 0); // Select chip
+  spi_device_polling_transmit(_spi, &t);
+  gpio_set_level((gpio_num_t)_cs, 1); // Deselect chip
 }
 
 void EInkDisplay::sendData(uint8_t data) {
-  SPI.beginTransaction(spiSettings);
-  digitalWrite(_dc, HIGH); // Data mode
-  digitalWrite(_cs, LOW);  // Select chip
-  SPI.transfer(data);
-  digitalWrite(_cs, HIGH); // Deselect chip
-  SPI.endTransaction();
+  spi_transaction_t t = {};
+  t.length = 8;
+  t.flags = SPI_TRANS_USE_TXDATA;
+  t.tx_data[0] = data;
+  gpio_set_level((gpio_num_t)_dc, 1); // Data mode
+  gpio_set_level((gpio_num_t)_cs, 0); // Select chip
+  spi_device_polling_transmit(_spi, &t);
+  gpio_set_level((gpio_num_t)_cs, 1); // Deselect chip
 }
 
 void EInkDisplay::sendData(const uint8_t *data, uint16_t length) {
-  SPI.beginTransaction(spiSettings);
-  digitalWrite(_dc, HIGH);      // Data mode
-  digitalWrite(_cs, LOW);       // Select chip
-  SPI.writeBytes(data, length); // Transfer all bytes
-  digitalWrite(_cs, HIGH);      // Deselect chip
-  SPI.endTransaction();
+  // Keep CS asserted across all chunks (matches Arduino SPI.writeBytes behaviour)
+  gpio_set_level((gpio_num_t)_dc, 1); // Data mode
+  gpio_set_level((gpio_num_t)_cs, 0); // Select chip
+
+  // Chunk to match the IDF SPI bus max_transfer_sz set by Arduino's SPI.begin()
+  constexpr size_t kChunk = 4092;
+  const uint8_t *p = data;
+  uint16_t remaining = length;
+  while (remaining > 0) {
+    const uint16_t chunk = remaining > kChunk ? static_cast<uint16_t>(kChunk) : remaining;
+    spi_transaction_t t = {};
+    t.length = chunk * 8;
+    t.tx_buffer = p;
+    spi_device_polling_transmit(_spi, &t);
+    p += chunk;
+    remaining -= chunk;
+  }
+
+  gpio_set_level((gpio_num_t)_cs, 1); // Deselect chip
 }
 
 void EInkDisplay::waitWhileBusy(const char *comment) {
-  unsigned long start = millis();
+  const uint32_t start = now_ms();
   if (!_x3Mode) {
-    while (digitalRead(_busy) == HIGH) {
-      delay(1);
-      if (millis() - start > 30000)
+    while (gpio_get_level((gpio_num_t)_busy) == 1) {
+      vTaskDelay(pdMS_TO_TICKS(1));
+      if (now_ms() - start > 30000)
         break;
     }
   } else {
     bool sawLow = false;
-    while (digitalRead(_busy) == HIGH) {
-      delay(1);
-      if (millis() - start > 1000)
+    while (gpio_get_level((gpio_num_t)_busy) == 1) {
+      vTaskDelay(pdMS_TO_TICKS(1));
+      if (now_ms() - start > 1000)
         break;
     }
-    if (digitalRead(_busy) == LOW) {
+    if (gpio_get_level((gpio_num_t)_busy) == 0) {
       sawLow = true;
-      while (digitalRead(_busy) == LOW) {
-        delay(1);
-        if (millis() - start > 30000)
+      while (gpio_get_level((gpio_num_t)_busy) == 0) {
+        vTaskDelay(pdMS_TO_TICKS(1));
+        if (now_ms() - start > 30000)
           break;
       }
     }
     if (!sawLow)
       return;
   }
-  if (comment) {
-    if (Serial)
-      Serial.printf("[%lu]   Wait complete: %s (%lu ms)\n", millis(), comment,
-                    millis() - start);
-  }
+  (void)comment;
 }
 
 void EInkDisplay::initDisplayController() {
@@ -561,9 +573,6 @@ void EInkDisplay::initDisplayController() {
   }
 #endif
 
-  if (Serial)
-    Serial.printf("[%lu]   Initializing SSD1677 controller...\n", millis());
-
   const uint8_t TEMP_SENSOR_INTERNAL = 0x80;
 
   // Soft reset
@@ -595,8 +604,6 @@ void EInkDisplay::initDisplayController() {
   // Set up full screen RAM area
   setRamArea(0, 0, displayWidth, displayHeight);
 
-  if (Serial)
-    Serial.printf("[%lu]   Clearing RAM buffers...\n", millis());
   sendCommand(CMD_AUTO_WRITE_BW_RAM); // Auto write BW RAM
   sendData(0xF7);
   waitWhileBusy(" CMD_AUTO_WRITE_BW_RAM");
@@ -605,8 +612,6 @@ void EInkDisplay::initDisplayController() {
   sendData(0xF7);                      // Fill with white pattern
   waitWhileBusy(" CMD_AUTO_WRITE_RED_RAM");
 
-  if (Serial)
-    Serial.printf("[%lu]   SSD1677 controller initialized\n", millis());
 }
 
 void EInkDisplay::setRamArea(const uint16_t x, uint16_t y, uint16_t w,
@@ -653,10 +658,10 @@ void EInkDisplay::drawImage(const uint8_t *imageData, const uint16_t x,
                             const uint16_t y, const uint16_t w,
                             const uint16_t h, const bool fromProgmem) const {
   if (!frameBuffer) {
-    if (Serial)
-      Serial.printf("[%lu]   ERROR: Frame buffer not allocated!\n", millis());
     return;
   }
+
+  (void)fromProgmem;  // pgm_read_byte is a no-op on ESP32; both paths are identical
 
   // Calculate bytes per line for the image
   const uint16_t imageWidthBytes = w / 8;
@@ -674,17 +679,9 @@ void EInkDisplay::drawImage(const uint8_t *imageData, const uint16_t x,
       if ((x / 8 + col) >= displayWidthBytes)
         break;
 
-      if (fromProgmem) {
-        frameBuffer[destOffset + col] =
-            pgm_read_byte(&imageData[srcOffset + col]);
-      } else {
-        frameBuffer[destOffset + col] = imageData[srcOffset + col];
-      }
+      frameBuffer[destOffset + col] = imageData[srcOffset + col];
     }
   }
-
-  if (Serial)
-    Serial.printf("[%lu]   Image drawn to frame buffer\n", millis());
 }
 
 // Draws only black pixels from the image, leaves white pixels clear (unchanged
@@ -694,9 +691,10 @@ void EInkDisplay::drawImageTransparent(const uint8_t *imageData,
                                        const uint16_t w, const uint16_t h,
                                        const bool fromProgmem) const {
   if (!frameBuffer) {
-    Serial.printf("[%lu]   ERROR: Frame buffer not allocated!\n", millis());
     return;
   }
+
+  (void)fromProgmem;  // pgm_read_byte is a no-op on ESP32; both paths are identical
 
   // Calculate bytes per line for the image
   const uint16_t imageWidthBytes = w / 8;
@@ -714,32 +712,17 @@ void EInkDisplay::drawImageTransparent(const uint8_t *imageData,
       if ((x / 8 + col) >= displayWidthBytes)
         break;
 
-      uint8_t srcByte = fromProgmem ? pgm_read_byte(&imageData[srcOffset + col])
-                                    : imageData[srcOffset + col];
+      const uint8_t srcByte = imageData[srcOffset + col];
       frameBuffer[destOffset + col] &= srcByte;
     }
   }
 
-  if (Serial)
-    Serial.printf("[%lu]   Transparent image drawn to frame buffer\n",
-                  millis());
 }
 
 void EInkDisplay::writeRamBuffer(uint8_t ramBuffer, const uint8_t *data,
                                  uint32_t size) {
-  const char *bufferName = (ramBuffer == CMD_WRITE_RAM_BW) ? "BW" : "RED";
-  const unsigned long startTime = millis();
-  if (Serial)
-    Serial.printf("[%lu]   Writing frame buffer to %s RAM (%lu bytes)...\n",
-                  startTime, bufferName, size);
-
   sendCommand(ramBuffer);
-  sendData(data, size);
-
-  const unsigned long duration = millis() - startTime;
-  if (Serial)
-    Serial.printf("[%lu]   %s RAM write complete (%lu ms)\n", millis(),
-                  bufferName, duration);
+  sendData(data, static_cast<uint16_t>(size));
 }
 
 void EInkDisplay::setFramebuffer(const uint8_t *bwBuffer) const {
@@ -767,16 +750,30 @@ void EInkDisplay::grayscaleRevert() {
     // BW states, equivalent to the X4's lut_grayscale_revert pass.
     auto sendCommandDataX3 = [&](uint8_t cmd, const uint8_t *data,
                                  uint16_t len) {
-      SPI.beginTransaction(spiSettings);
-      digitalWrite(_cs, LOW);
-      digitalWrite(_dc, LOW);
-      SPI.transfer(cmd);
-      if (len > 0 && data != nullptr) {
-        digitalWrite(_dc, HIGH);
-        SPI.writeBytes(data, len);
+      // Stack-copy data (may be in flash/DROM) before SPI transfer
+      uint8_t buf[64];
+      const uint8_t *txData = data;
+      if (len > 0 && data != nullptr && len <= sizeof(buf)) {
+        memcpy(buf, data, len);
+        txData = buf;
       }
-      digitalWrite(_cs, HIGH);
-      SPI.endTransaction();
+      spi_device_acquire_bus(_spi, portMAX_DELAY);
+      gpio_set_level((gpio_num_t)_cs, 0);
+      spi_transaction_t tc = {};
+      tc.length = 8;
+      tc.flags = SPI_TRANS_USE_TXDATA;
+      tc.tx_data[0] = cmd;
+      gpio_set_level((gpio_num_t)_dc, 0);
+      spi_device_polling_transmit(_spi, &tc);
+      if (len > 0 && txData != nullptr) {
+        gpio_set_level((gpio_num_t)_dc, 1);
+        spi_transaction_t td = {};
+        td.length = len * 8;
+        td.tx_buffer = txData;
+        spi_device_polling_transmit(_spi, &td);
+      }
+      gpio_set_level((gpio_num_t)_cs, 1);
+      spi_device_release_bus(_spi);
     };
     sendCommandDataX3(0x20, lut_x3_vcom_full, 42);
     sendCommandDataX3(0x21, lut_x3_ww_full, 42);
@@ -952,16 +949,30 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     const bool fastMode = (mode != FULL_REFRESH);
     auto sendCommandDataX3 = [&](uint8_t cmd, const uint8_t *data,
                                  uint16_t len) {
-      SPI.beginTransaction(spiSettings);
-      digitalWrite(_cs, LOW);
-      digitalWrite(_dc, LOW);
-      SPI.transfer(cmd);
-      if (len > 0 && data != nullptr) {
-        digitalWrite(_dc, HIGH);
-        SPI.writeBytes(data, len);
+      // Stack-copy data (may be in flash/DROM) before SPI transfer
+      uint8_t buf[64];
+      const uint8_t *txData = data;
+      if (len > 0 && data != nullptr && len <= sizeof(buf)) {
+        memcpy(buf, data, len);
+        txData = buf;
       }
-      digitalWrite(_cs, HIGH);
-      SPI.endTransaction();
+      spi_device_acquire_bus(_spi, portMAX_DELAY);
+      gpio_set_level((gpio_num_t)_cs, 0);
+      spi_transaction_t tc = {};
+      tc.length = 8;
+      tc.flags = SPI_TRANS_USE_TXDATA;
+      tc.tx_data[0] = cmd;
+      gpio_set_level((gpio_num_t)_dc, 0);
+      spi_device_polling_transmit(_spi, &tc);
+      if (len > 0 && txData != nullptr) {
+        gpio_set_level((gpio_num_t)_dc, 1);
+        spi_transaction_t td = {};
+        td.length = len * 8;
+        td.tx_buffer = txData;
+        spi_device_polling_transmit(_spi, &td);
+      }
+      gpio_set_level((gpio_num_t)_cs, 1);
+      spi_device_release_bus(_spi);
     };
     auto sendCommandDataByteX3 = [&](uint8_t cmd, uint8_t d0, uint8_t d1) {
       const uint8_t d[2] = {d0, d1};
@@ -1005,10 +1016,6 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     const bool doFullSync = !fastMode || !_x3RedRamSynced ||
                             _x3InitialFullSyncsRemaining > 0 || forcedFullSync;
 
-    if (Serial) {
-      Serial.printf("[%lu]   X3_OEM_%s\n", millis(),
-                    doFullSync ? "FULL" : "FAST");
-    }
     _x3GrayState.lastBaseWasPartial = !doFullSync;
 
     if (doFullSync) {
@@ -1041,8 +1048,6 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
       isScreenOn = true;
     }
 
-    if (Serial)
-      Serial.printf("[%lu]   X3_OEM_TRIGGER=0x12\n", millis());
     sendCommand(0x12);
     waitForRefresh(" X3_CMD12");
 
@@ -1053,7 +1058,7 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     }
 
     if (!fastMode)
-      delay(200);
+      vTaskDelay(pdMS_TO_TICKS(200));
 
     uint8_t postConditionPasses = 0;
     if (doFullSync) {
@@ -1086,10 +1091,6 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
       sendCommandDataByteX3(0x50, 0x29, 0x07);
 
       for (uint8_t i = 0; i < postConditionPasses; i++) {
-        if (Serial)
-          Serial.printf("[%lu]   X3_OEM_COND %u/%u\n", millis(),
-                        static_cast<unsigned>(i + 1),
-                        static_cast<unsigned>(postConditionPasses));
         sendCommand(0x91);
         sendCommandDataX3(0x90, w, 9);
         sendPlane(0x13, frameBuffer, false);
@@ -1099,8 +1100,6 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
           waitForRefresh(" X3_CMD04");
           isScreenOn = true;
         }
-        if (Serial)
-          Serial.printf("[%lu]   X3_OEM_TRIGGER=0x12(cond)\n", millis());
         sendCommand(0x12);
         waitForRefresh(" X3_CMD12(cond)");
       }
@@ -1158,30 +1157,17 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
 // pixels)
 void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                                 const bool turnOffScreen) {
-  if (Serial)
-    Serial.printf("[%lu]   Displaying window at (%d,%d) size (%dx%d)\n",
-                  millis(), x, y, w, h);
-
   // Validate bounds
   if (x + w > displayWidth || y + h > displayHeight) {
-    if (Serial)
-      Serial.printf("[%lu]   ERROR: Window bounds exceed display dimensions!\n",
-                    millis());
     return;
   }
 
   // Validate byte alignment
   if (x % 8 != 0 || w % 8 != 0) {
-    if (Serial)
-      Serial.printf("[%lu]   ERROR: Window x and width must be byte-aligned "
-                    "(multiples of 8)!\n",
-                    millis());
     return;
   }
 
   if (!frameBuffer) {
-    if (Serial)
-      Serial.printf("[%lu]   ERROR: Frame buffer not allocated!\n", millis());
     return;
   }
 
@@ -1194,10 +1180,6 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
   // Calculate window buffer size
   const uint16_t windowWidthBytes = w / 8;
   const uint32_t windowBufferSize = windowWidthBytes * h;
-
-  if (Serial)
-    Serial.printf("[%lu]   Window buffer size: %lu bytes (%d x %d pixels)\n",
-                  millis(), windowBufferSize, w, h);
 
   // Allocate temporary buffer on stack
   std::vector<uint8_t> windowBuffer(windowBufferSize);
@@ -1239,8 +1221,6 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
   writeRamBuffer(CMD_WRITE_RAM_RED, windowBuffer.data(), windowBufferSize);
 #endif
 
-  if (Serial)
-    Serial.printf("[%lu]   Window display complete\n", millis());
 }
 
 void EInkDisplay::displayGrayBuffer(const bool turnOffScreen,
@@ -1263,16 +1243,30 @@ void EInkDisplay::displayGrayBuffer(const bool turnOffScreen,
 
     auto sendCommandDataX3 = [&](uint8_t cmd, const uint8_t *data,
                                  uint16_t len) {
-      SPI.beginTransaction(spiSettings);
-      digitalWrite(_cs, LOW);
-      digitalWrite(_dc, LOW);
-      SPI.transfer(cmd);
-      if (len > 0 && data != nullptr) {
-        digitalWrite(_dc, HIGH);
-        SPI.writeBytes(data, len);
+      // Stack-copy data (may be in flash/DROM) before SPI transfer
+      uint8_t buf[64];
+      const uint8_t *txData = data;
+      if (len > 0 && data != nullptr && len <= sizeof(buf)) {
+        memcpy(buf, data, len);
+        txData = buf;
       }
-      digitalWrite(_cs, HIGH);
-      SPI.endTransaction();
+      spi_device_acquire_bus(_spi, portMAX_DELAY);
+      gpio_set_level((gpio_num_t)_cs, 0);
+      spi_transaction_t tc = {};
+      tc.length = 8;
+      tc.flags = SPI_TRANS_USE_TXDATA;
+      tc.tx_data[0] = cmd;
+      gpio_set_level((gpio_num_t)_dc, 0);
+      spi_device_polling_transmit(_spi, &tc);
+      if (len > 0 && txData != nullptr) {
+        gpio_set_level((gpio_num_t)_dc, 1);
+        spi_transaction_t td = {};
+        td.length = len * 8;
+        td.tx_buffer = txData;
+        spi_device_polling_transmit(_spi, &td);
+      }
+      gpio_set_level((gpio_num_t)_cs, 1);
+      spi_device_release_bus(_spi);
     };
     auto sendCommandDataByteX3 = [&](uint8_t cmd, uint8_t d0, uint8_t d1) {
       const uint8_t d[2] = {d0, d1};
@@ -1283,15 +1277,6 @@ void EInkDisplay::displayGrayBuffer(const bool turnOffScreen,
       // Factory absolute mode - use image/factory LUTs
       // Note: X3 has no separate fast factory LUTs. Fast mode falls back to
       // quality (lut_x3_*_img) with a warning.
-      if (lut == lut_factory_fast) {
-        if (Serial)
-          Serial.printf(
-              "[%lu]   X3_GRAY_MODE=factory_fast (fallback to quality)\n",
-              millis());
-      } else {
-        if (Serial)
-          Serial.printf("[%lu]   X3_GRAY_MODE=factory_quality\n", millis());
-      }
       sendCommandDataX3(0x20, lut_x3_vcom_img, 42);
       sendCommandDataX3(0x21, lut_x3_ww_img, 42);
       sendCommandDataX3(0x22, lut_x3_bw_img, 42);
@@ -1300,8 +1285,6 @@ void EInkDisplay::displayGrayBuffer(const bool turnOffScreen,
       sendCommandDataByteX3(0x50, 0xA9, 0x07);
     } else {
       // Differential grayscale mode
-      if (Serial)
-        Serial.printf("[%lu]   X3_GRAY_MODE=diff_gray\n", millis());
       sendCommandDataX3(0x20, lut_x3_vcom_gray, 42);
       sendCommandDataX3(0x21, lut_x3_ww_gray, 42);
       sendCommandDataX3(0x22, lut_x3_bw_gray, 42);
@@ -1421,58 +1404,42 @@ void EInkDisplay::refreshDisplay(const RefreshMode mode,
   const char *refreshType = (mode == FULL_REFRESH)   ? "full"
                             : (mode == HALF_REFRESH) ? "half"
                                                      : "fast";
-  if (Serial)
-    Serial.printf("[%lu]   Powering on display 0x%02X (%s refresh)...\n",
-                  millis(), displayMode, refreshType);
   sendCommand(CMD_DISPLAY_UPDATE_CTRL2);
   sendData(displayMode);
 
   sendCommand(CMD_MASTER_ACTIVATION);
 
-  // Wait for display to finish updating
-  if (Serial)
-    Serial.printf("[%lu]   Waiting for display refresh...\n", millis());
   waitWhileBusy(refreshType);
 }
 
 void EInkDisplay::setCustomLUT(const bool enabled,
                                const unsigned char *lutData) {
   if (enabled) {
-    if (Serial)
-      Serial.printf("[%lu]   Loading custom LUT...\n", millis());
-
     // Load custom LUT (first 105 bytes: VS + TP/RP + frame rate)
     sendCommand(CMD_WRITE_LUT);
     for (uint16_t i = 0; i < 105; i++) {
-      sendData(pgm_read_byte(&lutData[i]));
+      sendData(lutData[i]);
     }
 
     // Set voltage values from bytes 105-109
     sendCommand(CMD_GATE_VOLTAGE); // VGH
-    sendData(pgm_read_byte(&lutData[105]));
+    sendData(lutData[105]);
 
-    sendCommand(CMD_SOURCE_VOLTAGE);        // VSH1, VSH2, VSL
-    sendData(pgm_read_byte(&lutData[106])); // VSH1
-    sendData(pgm_read_byte(&lutData[107])); // VSH2
-    sendData(pgm_read_byte(&lutData[108])); // VSL
+    sendCommand(CMD_SOURCE_VOLTAGE); // VSH1, VSH2, VSL
+    sendData(lutData[106]);          // VSH1
+    sendData(lutData[107]);          // VSH2
+    sendData(lutData[108]);          // VSL
 
     sendCommand(CMD_WRITE_VCOM); // VCOM
-    sendData(pgm_read_byte(&lutData[109]));
+    sendData(lutData[109]);
 
     customLutActive = true;
-    if (Serial)
-      Serial.printf("[%lu]   Custom LUT loaded\n", millis());
   } else {
     customLutActive = false;
-    if (Serial)
-      Serial.printf("[%lu]   Custom LUT disabled\n", millis());
   }
 }
 
 void EInkDisplay::deepSleep() {
-  if (Serial)
-    Serial.printf("[%lu]   Preparing display for deep sleep...\n", millis());
-
   // First, power down the display properly
   // This shuts down the analog power rails and clock
   if (isScreenOn) {
@@ -1491,8 +1458,6 @@ void EInkDisplay::deepSleep() {
   }
 
   // Now enter deep sleep mode
-  if (Serial)
-    Serial.printf("[%lu]   Entering deep sleep mode...\n", millis());
   sendCommand(CMD_DEEP_SLEEP);
   sendData(0x01); // Enter deep sleep
 }
@@ -1503,8 +1468,6 @@ void EInkDisplay::saveFrameBufferAsPBM(const char *filename) {
 
   std::ofstream file(filename, std::ios::binary);
   if (!file) {
-    if (Serial)
-      Serial.printf("Failed to open %s for writing\n", filename);
     return;
   }
 
@@ -1542,11 +1505,7 @@ void EInkDisplay::saveFrameBufferAsPBM(const char *filename) {
   file.write(reinterpret_cast<const char *>(rotatedBuffer.data()),
              rotatedBuffer.size());
   file.close();
-  if (Serial)
-    Serial.printf("Saved framebuffer to %s\n", filename);
 #else
   (void)filename;
-  if (Serial)
-    Serial.println("saveFrameBufferAsPBM is not supported on Arduino builds.");
 #endif
 }

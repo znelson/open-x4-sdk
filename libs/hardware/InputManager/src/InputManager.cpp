@@ -1,4 +1,6 @@
 #include "InputManager.h"
+#include <driver/gpio.h>
+#include <esp_timer.h>
 
 // Recorded ADC values from real devices
 // BACK CONF LEFT RGHT   UP DOWN
@@ -29,11 +31,33 @@ InputManager::InputManager()
       powerButtonPressStart(0),
       powerButtonPressFinish(0) {}
 
+InputManager::~InputManager() {
+    if (_adcUnit) {
+        adc_oneshot_del_unit(_adcUnit);
+    }
+}
+
 void InputManager::begin() {
-  pinMode(BUTTON_ADC_PIN_1, INPUT);
-  pinMode(BUTTON_ADC_PIN_2, INPUT);
-  pinMode(POWER_BUTTON_PIN, INPUT_PULLUP);
-  analogSetAttenuation(ADC_11db);
+    const adc_oneshot_unit_init_cfg_t unitCfg = {
+        .unit_id = ADC_UNIT_1,
+    };
+    adc_oneshot_new_unit(&unitCfg, &_adcUnit);
+
+    const adc_oneshot_chan_cfg_t chanCfg = {
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+    adc_oneshot_config_channel(_adcUnit, static_cast<adc_channel_t>(BUTTON_ADC_PIN_1), &chanCfg);
+    adc_oneshot_config_channel(_adcUnit, static_cast<adc_channel_t>(BUTTON_ADC_PIN_2), &chanCfg);
+
+    const gpio_config_t powerBtnCfg = {
+        .pin_bit_mask = (1ULL << POWER_BUTTON_PIN),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&powerBtnCfg);
 }
 
 int InputManager::getButtonFromADC(const int adcValue, const int ranges[], const int numButtons) {
@@ -50,29 +74,35 @@ uint8_t InputManager::getState() {
   uint8_t state = 0;
 
   // Read GPIO1 buttons
-  const int adcValue1 = analogRead(BUTTON_ADC_PIN_1);
+  int adcValue1 = 0;
+  adc_oneshot_read(_adcUnit, static_cast<adc_channel_t>(BUTTON_ADC_PIN_1), &adcValue1);
   const int button1 = getButtonFromADC(adcValue1, ADC_RANGES_1, NUM_BUTTONS_1);
   if (button1 >= 0) {
     state |= (1 << button1);
   }
 
   // Read GPIO2 buttons
-  const int adcValue2 = analogRead(BUTTON_ADC_PIN_2);
+  int adcValue2 = 0;
+  adc_oneshot_read(_adcUnit, static_cast<adc_channel_t>(BUTTON_ADC_PIN_2), &adcValue2);
   const int button2 = getButtonFromADC(adcValue2, ADC_RANGES_2, NUM_BUTTONS_2);
   if (button2 >= 0) {
     state |= (1 << (button2 + 4));
   }
 
   // Read power button (digital, active LOW)
-  if (digitalRead(POWER_BUTTON_PIN) == LOW) {
+  if (gpio_get_level((gpio_num_t)POWER_BUTTON_PIN) == 0) {
     state |= (1 << BTN_POWER);
   }
 
   return state;
 }
 
+static inline uint32_t now_ms() {
+    return static_cast<uint32_t>(esp_timer_get_time() / 1000);
+}
+
 void InputManager::update() {
-  const unsigned long currentTime = millis();
+  const uint32_t currentTime = now_ms();
   const uint8_t state = getState();
 
   // Always clear events first
@@ -136,19 +166,19 @@ bool InputManager::wasAnyReleased() const {
   return releasedEvents > 0;
 }
 
-unsigned long InputManager::getHeldTime() const {
-  // Still hold a button
+uint32_t InputManager::getHeldTime() const {
+  // Still holding a button
   if (currentState > 0) {
-    return millis() - buttonPressStart;
+    return now_ms() - buttonPressStart;
   }
 
   return buttonPressFinish - buttonPressStart;
 }
 
-unsigned long InputManager::getPowerButtonHeldTime() const {
+uint32_t InputManager::getPowerButtonHeldTime() const {
   // Power button is currently pressed
   if (isPressed(BTN_POWER)) {
-    return millis() - powerButtonPressStart;
+    return now_ms() - powerButtonPressStart;
   }
 
   // Power button was released
