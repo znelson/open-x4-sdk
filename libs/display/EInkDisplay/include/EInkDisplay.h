@@ -67,6 +67,12 @@ class EInkDisplay {
   // Hint the X3 policy to run a one-shot full resync on next update.
   void requestResync(uint8_t settlePasses = 0);
 
+  // Zero the X3 initial-full-sync counter and mark the RED RAM as already
+  // synced. Call after a warm restart (the panel was active ms ago); without
+  // this, the first two paints after begin() are promoted to FULL (~770ms
+  // each) regardless of the requested mode.
+  void skipInitialResync();
+
   // debug function
   void grayscaleRevert();
 

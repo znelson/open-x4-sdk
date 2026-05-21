@@ -272,6 +272,12 @@ void EInkDisplay::requestResync(uint8_t settlePasses) {
   _x3ForcedConditionPassesNext = _x3Mode ? settlePasses : 0;
 }
 
+void EInkDisplay::skipInitialResync() {
+  if (!_x3Mode) return;
+  _x3InitialFullSyncsRemaining = 0;
+  _x3RedRamSynced = true;
+}
+
 // Factory LUT extracted from firmware V3.1.9_CH_X4_0117.bin by CrazyCoder.
 // Uses absolute 2-bit pixel encoding: BW RAM = bit0 (LSB), RED RAM = bit1
 // (MSB). Pixel states: {RED=0,BW=0}=black, {RED=0,BW=1}=dark gray,
