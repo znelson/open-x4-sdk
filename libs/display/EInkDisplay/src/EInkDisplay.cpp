@@ -466,7 +466,14 @@ void EInkDisplay::waitForRefresh(const char *comment) {
   (void)comment;
 }
 
-void EInkDisplay::sendCommand(uint8_t command) {
+// The public sendCommand/sendData entry points each acquire and release the
+// IDF SPI bus mutex around the CS-asserted region. Hold the bus across the
+// entire region so the SD card (sharing SPI2_HOST) cannot drive MOSI while
+// our software CS is low. See docs/eink-spi-bus-race.md. Callers that need a
+// command + data pair to ride a single bus acquisition use the *Locked
+// variants directly after their own acquire_bus call.
+
+void EInkDisplay::sendCommandLocked(uint8_t command) {
   spi_transaction_t t = {};
   t.length = 8;
   t.flags = SPI_TRANS_USE_TXDATA;
@@ -477,7 +484,7 @@ void EInkDisplay::sendCommand(uint8_t command) {
   gpio_set_level((gpio_num_t)_cs, 1); // Deselect chip
 }
 
-void EInkDisplay::sendData(uint8_t data) {
+void EInkDisplay::sendDataLocked(uint8_t data) {
   spi_transaction_t t = {};
   t.length = 8;
   t.flags = SPI_TRANS_USE_TXDATA;
@@ -488,7 +495,7 @@ void EInkDisplay::sendData(uint8_t data) {
   gpio_set_level((gpio_num_t)_cs, 1); // Deselect chip
 }
 
-void EInkDisplay::sendData(const uint8_t *data, uint16_t length) {
+void EInkDisplay::sendDataLocked(const uint8_t *data, uint16_t length) {
   // Keep CS asserted across all chunks (matches Arduino SPI.writeBytes behaviour)
   gpio_set_level((gpio_num_t)_dc, 1); // Data mode
   gpio_set_level((gpio_num_t)_cs, 0); // Select chip
@@ -508,6 +515,24 @@ void EInkDisplay::sendData(const uint8_t *data, uint16_t length) {
   }
 
   gpio_set_level((gpio_num_t)_cs, 1); // Deselect chip
+}
+
+void EInkDisplay::sendCommand(uint8_t command) {
+  spi_device_acquire_bus(_spi, portMAX_DELAY);
+  sendCommandLocked(command);
+  spi_device_release_bus(_spi);
+}
+
+void EInkDisplay::sendData(uint8_t data) {
+  spi_device_acquire_bus(_spi, portMAX_DELAY);
+  sendDataLocked(data);
+  spi_device_release_bus(_spi);
+}
+
+void EInkDisplay::sendData(const uint8_t *data, uint16_t length) {
+  spi_device_acquire_bus(_spi, portMAX_DELAY);
+  sendDataLocked(data, length);
+  spi_device_release_bus(_spi);
 }
 
 void EInkDisplay::waitWhileBusy(const char *comment) {
@@ -727,8 +752,13 @@ void EInkDisplay::drawImageTransparent(const uint8_t *imageData,
 
 void EInkDisplay::writeRamBuffer(uint8_t ramBuffer, const uint8_t *data,
                                  uint32_t size) {
-  sendCommand(ramBuffer);
-  sendData(data, static_cast<uint16_t>(size));
+  // Hold the bus across the command + bulk data so the SD card cannot
+  // interleave a transaction between the two phases. See
+  // docs/eink-spi-bus-race.md.
+  spi_device_acquire_bus(_spi, portMAX_DELAY);
+  sendCommandLocked(ramBuffer);
+  sendDataLocked(data, static_cast<uint16_t>(size));
+  spi_device_release_bus(_spi);
 }
 
 void EInkDisplay::setFramebuffer(const uint8_t *bwBuffer) const {
@@ -823,8 +853,10 @@ void EInkDisplay::copyGrayscaleLsbBuffers(const uint8_t *lsbBuffer) {
       memcpy(rowA, rowB, displayWidthBytes);
       memcpy(rowB, rowTmp, displayWidthBytes);
     }
-    sendCommand(0x10);
-    sendData(buf, static_cast<uint16_t>(bufferSize));
+    spi_device_acquire_bus(_spi, portMAX_DELAY);
+    sendCommandLocked(0x10);
+    sendDataLocked(buf, static_cast<uint16_t>(bufferSize));
+    spi_device_release_bus(_spi);
     for (uint16_t top = 0, bot = displayHeight - 1; top < bot; top++, bot--) {
       uint8_t *rowA = buf + static_cast<uint32_t>(top) * displayWidthBytes;
       uint8_t *rowB = buf + static_cast<uint32_t>(bot) * displayWidthBytes;
@@ -859,8 +891,10 @@ void EInkDisplay::copyGrayscaleMsbBuffers(const uint8_t *msbBuffer) {
       memcpy(rowA, rowB, displayWidthBytes);
       memcpy(rowB, rowTmp, displayWidthBytes);
     }
-    sendCommand(0x13);
-    sendData(buf, static_cast<uint16_t>(bufferSize));
+    spi_device_acquire_bus(_spi, portMAX_DELAY);
+    sendCommandLocked(0x13);
+    sendDataLocked(buf, static_cast<uint16_t>(bufferSize));
+    spi_device_release_bus(_spi);
     for (uint16_t top = 0, bot = displayHeight - 1; top < bot; top++, bot--) {
       uint8_t *rowA = buf + static_cast<uint32_t>(top) * displayWidthBytes;
       uint8_t *rowB = buf + static_cast<uint32_t>(bot) * displayWidthBytes;
@@ -909,10 +943,12 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t *bwBuffer) {
       memcpy(rowA, rowB, displayWidthBytes);
       memcpy(rowB, rowTmp, displayWidthBytes);
     }
-    sendCommand(0x13);
-    sendData(buf, static_cast<uint16_t>(bufferSize));
-    sendCommand(0x10);
-    sendData(buf, static_cast<uint16_t>(bufferSize));
+    spi_device_acquire_bus(_spi, portMAX_DELAY);
+    sendCommandLocked(0x13);
+    sendDataLocked(buf, static_cast<uint16_t>(bufferSize));
+    sendCommandLocked(0x10);
+    sendDataLocked(buf, static_cast<uint16_t>(bufferSize));
+    spi_device_release_bus(_spi);
     for (uint16_t top = 0, bot = displayHeight - 1; top < bot; top++, bot--) {
       uint8_t *rowA = buf + static_cast<uint32_t>(top) * displayWidthBytes;
       uint8_t *rowB = buf + static_cast<uint32_t>(bot) * displayWidthBytes;
@@ -1011,8 +1047,13 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
       if (invert)
         invertBuffer(buf);
       flipRowsInPlace(buf);
-      sendCommand(ramCmd);
-      sendData(buf, static_cast<uint16_t>(bufferSize));
+      // Hold the bus across the command + bulk plane data so the SD card
+      // cannot interleave between the two phases. See
+      // docs/eink-spi-bus-race.md.
+      spi_device_acquire_bus(_spi, portMAX_DELAY);
+      sendCommandLocked(ramCmd);
+      sendDataLocked(buf, static_cast<uint16_t>(bufferSize));
+      spi_device_release_bus(_spi);
       flipRowsInPlace(buf);
       if (invert)
         invertBuffer(buf);

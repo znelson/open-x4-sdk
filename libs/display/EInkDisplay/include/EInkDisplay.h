@@ -134,6 +134,12 @@ class EInkDisplay {
   void sendCommand(uint8_t command);
   void sendData(uint8_t data);
   void sendData(const uint8_t* data, uint16_t length);
+  // Locked variants: caller must hold the SPI bus via spi_device_acquire_bus.
+  // Use these when sending a command + data pair under a single bus
+  // acquisition (e.g. writeRamBuffer). See docs/eink-spi-bus-race.md.
+  void sendCommandLocked(uint8_t command);
+  void sendDataLocked(uint8_t data);
+  void sendDataLocked(const uint8_t* data, uint16_t length);
   void waitForRefresh(const char* comment = nullptr);
   void waitWhileBusy(const char* comment = nullptr);
   void initDisplayController();
