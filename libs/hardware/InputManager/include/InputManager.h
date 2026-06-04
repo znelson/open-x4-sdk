@@ -1,10 +1,16 @@
 #pragma once
 
-#include <Arduino.h>
+#include <cstdint>
+#include <esp_adc/adc_oneshot.h>
 
 class InputManager {
  public:
   InputManager();
+  ~InputManager();
+
+  InputManager(const InputManager&) = delete;
+  InputManager& operator=(const InputManager&) = delete;
+
   void begin();
   uint8_t getState();
 
@@ -60,14 +66,17 @@ class InputManager {
    *
    * @return duration in milliseconds
    */
-  unsigned long getHeldTime() const;
+  uint32_t getHeldTime() const;
 
-    /**
+  /**
    * Returns the time the power button has been held
    *
    * @return duration in milliseconds
    */
-  unsigned long getPowerButtonHeldTime() const;
+  uint32_t getPowerButtonHeldTime() const;
+
+  // Returns the ADC unit handle for sharing with other ADC users (e.g. BatteryMonitor)
+  adc_oneshot_unit_handle_t getAdcUnit() const { return _adcUnit; }
 
   // Button indices
   static constexpr uint8_t BTN_BACK = 0;
@@ -96,12 +105,13 @@ class InputManager {
   uint8_t lastState;
   uint8_t pressedEvents;
   uint8_t releasedEvents;
-  unsigned long lastDebounceTime;
-  unsigned long buttonPressStart;
-  unsigned long buttonPressFinish;
-  unsigned long powerButtonPressStart;
-  unsigned long powerButtonPressFinish;
+  uint32_t lastDebounceTime;
+  uint32_t buttonPressStart;
+  uint32_t buttonPressFinish;
+  uint32_t powerButtonPressStart;
+  uint32_t powerButtonPressFinish;
 
+  adc_oneshot_unit_handle_t _adcUnit = nullptr;
 
   static constexpr int NUM_BUTTONS_1 = 4;
   static const int ADC_RANGES_1[];
@@ -110,7 +120,7 @@ class InputManager {
   static const int ADC_RANGES_2[];
 
   static constexpr int ADC_NO_BUTTON = 3900;
-  static constexpr unsigned long DEBOUNCE_DELAY = 5;
+  static constexpr uint32_t DEBOUNCE_DELAY = 5;
 
   static const char* BUTTON_NAMES[];
 };

@@ -1,6 +1,6 @@
 #pragma once
-#include <Arduino.h>
-#include <SPI.h>
+#include <cstdint>
+#include <driver/spi_master.h>
 
 class EInkDisplay {
  public:
@@ -8,7 +8,7 @@ class EInkDisplay {
   EInkDisplay(int8_t sclk, int8_t mosi, int8_t cs, int8_t dc, int8_t rst, int8_t busy);
 
   // Destructor
-  ~EInkDisplay() = default;
+  ~EInkDisplay();
 
   // Refresh modes (guarded to avoid redefinition in test builds)
   enum RefreshMode {
@@ -20,7 +20,8 @@ class EInkDisplay {
   // Set X3 panel geometry and mode (must be called before begin())
   void setDisplayX3();
 
-  // Initialize the display hardware and driver
+  // Initialize the display hardware and driver.
+  // Requires the SPI bus to be initialized beforehand (e.g., by HalGPIO::begin()).
   void begin();
 
   // Legacy compile-time dimensions kept for compatibility.
@@ -133,8 +134,8 @@ class EInkDisplay {
   uint8_t* frameBufferActive;
 #endif
 
-  // SPI settings
-  SPISettings spiSettings;
+  // SPI device handle (bus initialized externally by HalGPIO::begin())
+  spi_device_handle_t _spi = nullptr;
 
   // State
   bool isScreenOn = false;
@@ -147,6 +148,12 @@ class EInkDisplay {
   void sendCommand(uint8_t command);
   void sendData(uint8_t data);
   void sendData(const uint8_t* data, uint16_t length);
+  // Locked variants: caller must hold the SPI bus via spi_device_acquire_bus.
+  // Use these when sending a command + data pair under a single bus
+  // acquisition (e.g. writeRamBuffer). See docs/eink-spi-bus-race.md.
+  void sendCommandLocked(uint8_t command);
+  void sendDataLocked(uint8_t data);
+  void sendDataLocked(const uint8_t* data, uint16_t length);
   void waitForRefresh(const char* comment = nullptr);
   void waitWhileBusy(const char* comment = nullptr);
   // Shared body for the two waits above. X4 (SSD1677) and X3 (UC81xx-class)
@@ -171,6 +178,9 @@ class EInkDisplay {
   // sendPlaneX3/fillPlaneX3 (separated sendCommand+sendData). Not an
   // atomicity requirement, just convenience.
   void sendCommandDataX3(uint8_t cmd, const uint8_t* data, uint16_t len);
+  // Locked variant: caller must hold the SPI bus via spi_device_acquire_bus.
+  // Keeps CS asserted across the cmd + data pair (true single-burst write).
+  void sendCommandDataX3Locked(uint8_t cmd, const uint8_t* data, uint16_t len);
   void sendCommandDataByteX3(uint8_t cmd, uint8_t d0);
   void sendCommandDataByteX3(uint8_t cmd, uint8_t d0, uint8_t d1);
   // Bulk-write a pixel plane to one of the DTM RAM commands. Y-flips rows
