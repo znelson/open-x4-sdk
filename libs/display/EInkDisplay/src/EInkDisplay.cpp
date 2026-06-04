@@ -317,31 +317,44 @@ const uint8_t lut_x3_bb_full[] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
-// X3 OEM GC (grayscale/anti-aliased text) LUTs from V5.6.21 at flash
-// offset 0x402f74. OEM sets CDI 0x97 before loading this bank, triggers a
-// refresh, then leaves CDI at 0xD7 afterward.
+// X3 community 4-level grayscale LUTs — mechanical port of the X4
+// lut_grayscale VS patterns into the X3's 5-cell bank format. Used for both
+// reader AA text overlay and sleep-screen cover rendering. Drives 4 visibly-
+// distinct end states from the reader's (LSB→DTM1, MSB→DTM2) 4-plane encoding
+// by giving each cell a different net charge transfer:
+//   ww (1,1)  VS=0x20: brief +V              → near white
+//   bw (0,1)  VS=0x80: brief +V (later)      → light gray
+//   wb (1,0)  VS=0x54: triple -V pulses      → dark gray
+//   bb (0,0)  VS=0x00: no drive              → preserves prior state
+// NOT an OEM-derived bank. OEM V5.1.6 has no 4-level differential bank — its
+// "_full" and "short" banks are both 2-level transition LUTs that cannot
+// produce 4 distinct end states from a 2-plane absolute encoding. The
+// community LUT solves what the reader needs even though OEM does not solve
+// that problem the same way (OEM dithers covers to BW). The previous V5.6.21
+// "_gc" bytes loaded here (~52-frame anti-aliased text touchup waveform)
+// collapsed mid-grays toward black on full-frame content — see fix history.
 const uint8_t lut_x3_vcom_gc[] = {
-    0x01, 0x1A, 0x1A, 0x01, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 const uint8_t lut_x3_ww_gc[] = {
-    0x01, 0x5A, 0x9A, 0x01, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x20, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 const uint8_t lut_x3_bw_gc[] = {
-    0x01, 0x1A, 0x9A, 0x01, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x80, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 const uint8_t lut_x3_wb_gc[] = {
-    0x01, 0x1A, 0x5A, 0x01, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x54, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 const uint8_t lut_x3_bb_gc[] = {
-    0x01, 0x9A, 0x5A, 0x01, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -1322,7 +1335,6 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     const bool forcedFullSync = _x3ForceFullSyncNext;
     const bool doFullSync = (!fastMode && !halfMode) || !_x3RedRamSynced ||
                             _x3InitialFullSyncsRemaining > 0 || forcedFullSync;
-    // Half mode only applies if we're not already being promoted to full.
     const bool doHalfSync = halfMode && !doFullSync;
 
     _x3GrayState.lastBaseWasPartial = !doFullSync;
@@ -1428,6 +1440,21 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     sendPlaneX3(CMD_X3_DTM1, frameBuffer, false);
     sendCommand(CMD_X3_DATA_STOP); // commit DTM1 — no refresh follows
     _x3RedRamSynced = true;
+
+    // The first differential after a full garbles on X3: the controller's post-full state corrupts
+    // the next fast/half diff (not a DTM1-content issue; promoting that op to a half didn't help, a
+    // full did). Spend that slot here with a no-op fast of the just-displayed frame. DTM1 and DTM2
+    // both hold it, so nothing visibly changes, but it leaves the controller in the post-fast state
+    // so the caller's next diff (menu open, first page turn, first turn after the periodic full) is
+    // clean instead of the garbling first-after-full.
+    if (doFullSync) {
+      loadLutBankX3WithCdi(0x29, 0x07, lut_x3_vcom_fast, lut_x3_ww_fast, lut_x3_bw_fast, lut_x3_wb_fast,
+                           lut_x3_bb_fast);
+      sendPlaneX3(CMD_X3_DTM2, frameBuffer, false);
+      triggerRefreshX3(turnOffScreen, "(post-full settle)");
+      sendPlaneX3(CMD_X3_DTM1, frameBuffer, false);
+      sendCommand(CMD_X3_DATA_STOP);
+    }
 
     if (doFullSync && _x3InitialFullSyncsRemaining > 0) {
       _x3InitialFullSyncsRemaining--;
@@ -1583,16 +1610,14 @@ void EInkDisplay::displayGrayBuffer(const bool turnOffScreen,
       loadLutBankX3WithCdi(0x29, 0x07, lut_x3_vcom_full, lut_x3_ww_full,
                            lut_x3_bw_full, lut_x3_wb_full, lut_x3_bb_full);
     } else {
-      // Differential grayscale mode
-      loadLutBankX3WithCdi(0x97, lut_x3_vcom_gc, lut_x3_ww_gc,
+      // Differential grayscale mode — community 4-level LUT (see definition
+      // above). CDI 0x29,0x07 (OEM full-refresh CDI) drives the border cleanly
+      // during the 4-level cell refresh.
+      loadLutBankX3WithCdi(0x29, 0x07, lut_x3_vcom_gc, lut_x3_ww_gc,
                            lut_x3_bw_gc, lut_x3_wb_gc, lut_x3_bb_gc);
     }
 
     triggerRefreshX3(turnOffScreen, "(gray)");
-    if (!factoryMode) {
-      // OEM's GC path leaves CDI at 0xD7 after the grayscale refresh.
-      sendCommandDataByteX3(CMD_X3_VCOM_DATA_INTERVAL, 0xD7);
-    }
 
     _x3RedRamSynced = false;
     _x3ForceFullSyncNext = false;
