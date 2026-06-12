@@ -585,14 +585,34 @@ void EInkDisplay::pollBusy(const char *comment, const char *completeWord) {
   (void)comment;
 }
 
-// The public sendCommand/sendData entry points each acquire and release the
-// IDF SPI bus mutex around the CS-asserted region. Hold the bus across the
-// entire region so the SD card (sharing SPI2_HOST) cannot drive MOSI while
-// our software CS is low. See docs/eink-spi-bus-race.md. Callers that need a
-// command + data pair to ride a single bus acquisition use the *Locked
-// variants directly after their own acquire_bus call.
+// RAII hold on the IDF SPI bus mutex (spi_device_acquire_bus /
+// spi_device_release_bus). Multi-step EInk transactions construct one so the
+// SD card (sharing SPI2_HOST) cannot drive MOSI while our software CS is
+// asserted; the release runs at scope exit on every path, including early
+// returns. Declared in the header so the *Locked signatures can reference
+// it; defined here to keep <freertos/FreeRTOS.h> (portMAX_DELAY) out of the
+// header.
+class EInkDisplay::SpiBusHold {
+ public:
+  explicit SpiBusHold(spi_device_handle_t spi) : _spi(spi) {
+    spi_device_acquire_bus(_spi, portMAX_DELAY);
+  }
+  ~SpiBusHold() { spi_device_release_bus(_spi); }
+  SpiBusHold(const SpiBusHold&) = delete;
+  SpiBusHold& operator=(const SpiBusHold&) = delete;
 
-void EInkDisplay::sendCommandLocked(uint8_t command) {
+ private:
+  spi_device_handle_t _spi;
+};
+
+// The public sendCommand/sendData entry points each hold the IDF SPI bus
+// mutex around the CS-asserted region via SpiBusHold. Hold the bus across the
+// entire region so the SD card (sharing SPI2_HOST) cannot drive MOSI while
+// our software CS is low. Callers that need a command + data pair to ride a
+// single bus acquisition construct their own SpiBusHold and pass it to the
+// *Locked variants.
+
+void EInkDisplay::sendCommandLocked(const SpiBusHold&, uint8_t command) {
   spi_transaction_t t = {};
   t.length = 8;
   t.flags = SPI_TRANS_USE_TXDATA;
@@ -603,7 +623,7 @@ void EInkDisplay::sendCommandLocked(uint8_t command) {
   gpio_set_level((gpio_num_t)_cs, 1); // Deselect chip
 }
 
-void EInkDisplay::sendDataLocked(uint8_t data) {
+void EInkDisplay::sendDataLocked(const SpiBusHold&, uint8_t data) {
   spi_transaction_t t = {};
   t.length = 8;
   t.flags = SPI_TRANS_USE_TXDATA;
@@ -614,7 +634,8 @@ void EInkDisplay::sendDataLocked(uint8_t data) {
   gpio_set_level((gpio_num_t)_cs, 1); // Deselect chip
 }
 
-void EInkDisplay::sendDataLocked(const uint8_t *data, uint16_t length) {
+void EInkDisplay::sendDataLocked(const SpiBusHold&, const uint8_t *data,
+                                 uint16_t length) {
   // Keep CS asserted across all chunks (matches Arduino SPI.writeBytes behaviour)
   gpio_set_level((gpio_num_t)_dc, 1); // Data mode
   gpio_set_level((gpio_num_t)_cs, 0); // Select chip
@@ -637,21 +658,18 @@ void EInkDisplay::sendDataLocked(const uint8_t *data, uint16_t length) {
 }
 
 void EInkDisplay::sendCommand(uint8_t command) {
-  spi_device_acquire_bus(_spi, portMAX_DELAY);
-  sendCommandLocked(command);
-  spi_device_release_bus(_spi);
+  SpiBusHold bus(_spi);
+  sendCommandLocked(bus, command);
 }
 
 void EInkDisplay::sendData(uint8_t data) {
-  spi_device_acquire_bus(_spi, portMAX_DELAY);
-  sendDataLocked(data);
-  spi_device_release_bus(_spi);
+  SpiBusHold bus(_spi);
+  sendDataLocked(bus, data);
 }
 
 void EInkDisplay::sendData(const uint8_t *data, uint16_t length) {
-  spi_device_acquire_bus(_spi, portMAX_DELAY);
-  sendDataLocked(data, length);
-  spi_device_release_bus(_spi);
+  SpiBusHold bus(_spi);
+  sendDataLocked(bus, data, length);
 }
 
 // ---- X3 (UC81xx) primitives ----------------------------------------------
@@ -667,11 +685,11 @@ void EInkDisplay::sendData(const uint8_t *data, uint16_t length) {
 // in-place Y-flip and row-streaming patterns simpler to express. This is
 // not a hard atomicity requirement of the controller.
 
-void EInkDisplay::sendCommandDataX3Locked(uint8_t cmd, const uint8_t *data,
-                                          uint16_t len) {
+void EInkDisplay::sendCommandDataX3Locked(const SpiBusHold&, uint8_t cmd,
+                                          const uint8_t *data, uint16_t len) {
   // Single CS-low burst across cmd + data, saving one CS toggle vs the
-  // separated sendCommandLocked + sendDataLocked pair. Caller must hold the
-  // SPI bus via spi_device_acquire_bus.
+  // separated sendCommandLocked + sendDataLocked pair. The SpiBusHold
+  // parameter proves the caller holds the SPI bus.
   gpio_set_level((gpio_num_t)_cs, 0);
   gpio_set_level((gpio_num_t)_dc, 0);
   spi_transaction_t tc = {};
@@ -692,11 +710,9 @@ void EInkDisplay::sendCommandDataX3Locked(uint8_t cmd, const uint8_t *data,
 void EInkDisplay::sendCommandDataX3(uint8_t cmd, const uint8_t *data,
                                     uint16_t len) {
   // Hold the bus across the command + data pair so the SD card (sharing
-  // SPI2_HOST) cannot interleave between the two phases. See
-  // docs/eink-spi-bus-race.md.
-  spi_device_acquire_bus(_spi, portMAX_DELAY);
-  sendCommandDataX3Locked(cmd, data, len);
-  spi_device_release_bus(_spi);
+  // SPI2_HOST) cannot interleave between the two phases.
+  SpiBusHold bus(_spi);
+  sendCommandDataX3Locked(bus, cmd, data, len);
 }
 
 void EInkDisplay::sendCommandDataByteX3(uint8_t cmd, uint8_t d0) {
@@ -732,11 +748,12 @@ void EInkDisplay::sendPlaneX3(uint8_t ramCmd, uint8_t *buf, bool invert) {
   if (invert) invertBuffer(buf);
   flipRowsInPlace(buf);
   // Hold the bus across the command + bulk plane data so the SD card
-  // cannot interleave between the two phases. See docs/eink-spi-bus-race.md.
-  spi_device_acquire_bus(_spi, portMAX_DELAY);
-  sendCommandLocked(ramCmd);
-  sendDataLocked(buf, static_cast<uint16_t>(bufferSize));
-  spi_device_release_bus(_spi);
+  // cannot interleave between the two phases.
+  {
+    SpiBusHold bus(_spi);
+    sendCommandLocked(bus, ramCmd);
+    sendDataLocked(bus, buf, static_cast<uint16_t>(bufferSize));
+  }
   flipRowsInPlace(buf);
   if (invert) invertBuffer(buf);
 }
@@ -747,43 +764,40 @@ void EInkDisplay::fillPlaneX3(uint8_t ramCmd, uint8_t fillByte) {
   // framebuffer (~50 KB) doesn't need to be touched or memset.
   uint8_t rowBuf[128];
   memset(rowBuf, fillByte, displayWidthBytes);
-  spi_device_acquire_bus(_spi, portMAX_DELAY);
-  sendCommandLocked(ramCmd);
+  SpiBusHold bus(_spi);
+  sendCommandLocked(bus, ramCmd);
   // sendDataLocked already drives DC HIGH and asserts CS for the chunk.
   // Send each row as a separate locked data write so CS toggles per row
   // (matches the writeBytes-per-row cadence of the original Arduino code).
   for (uint16_t y = 0; y < displayHeight; y++) {
-    sendDataLocked(rowBuf, displayWidthBytes);
+    sendDataLocked(bus, rowBuf, displayWidthBytes);
   }
-  spi_device_release_bus(_spi);
 }
 
 void EInkDisplay::loadLutBankX3(const uint8_t *vcom, const uint8_t *ww,
                                 const uint8_t *bw, const uint8_t *wb,
                                 const uint8_t *bb) {
   // Hold the bus across all 5 LUT register writes so the SD card cannot
-  // interleave between them. See docs/eink-spi-bus-race.md.
-  spi_device_acquire_bus(_spi, portMAX_DELAY);
-  sendCommandDataX3Locked(CMD_X3_LUT_VCOM, vcom, 42);
-  sendCommandDataX3Locked(CMD_X3_LUT_WW,   ww,   42);
-  sendCommandDataX3Locked(CMD_X3_LUT_BW,   bw,   42);
-  sendCommandDataX3Locked(CMD_X3_LUT_WB,   wb,   42);
-  sendCommandDataX3Locked(CMD_X3_LUT_BB,   bb,   42);
-  spi_device_release_bus(_spi);
+  // interleave between them.
+  SpiBusHold bus(_spi);
+  sendCommandDataX3Locked(bus, CMD_X3_LUT_VCOM, vcom, 42);
+  sendCommandDataX3Locked(bus, CMD_X3_LUT_WW,   ww,   42);
+  sendCommandDataX3Locked(bus, CMD_X3_LUT_BW,   bw,   42);
+  sendCommandDataX3Locked(bus, CMD_X3_LUT_WB,   wb,   42);
+  sendCommandDataX3Locked(bus, CMD_X3_LUT_BB,   bb,   42);
 }
 
 void EInkDisplay::loadLutBankX3WithCdi(uint8_t cdi0, const uint8_t *vcom,
                                        const uint8_t *ww, const uint8_t *bw,
                                        const uint8_t *wb, const uint8_t *bb) {
   const uint8_t cdiData[1] = {cdi0};
-  spi_device_acquire_bus(_spi, portMAX_DELAY);
-  sendCommandDataX3Locked(CMD_X3_VCOM_DATA_INTERVAL, cdiData, 1);
-  sendCommandDataX3Locked(CMD_X3_LUT_VCOM, vcom, 42);
-  sendCommandDataX3Locked(CMD_X3_LUT_WW,   ww,   42);
-  sendCommandDataX3Locked(CMD_X3_LUT_BW,   bw,   42);
-  sendCommandDataX3Locked(CMD_X3_LUT_WB,   wb,   42);
-  sendCommandDataX3Locked(CMD_X3_LUT_BB,   bb,   42);
-  spi_device_release_bus(_spi);
+  SpiBusHold bus(_spi);
+  sendCommandDataX3Locked(bus, CMD_X3_VCOM_DATA_INTERVAL, cdiData, 1);
+  sendCommandDataX3Locked(bus, CMD_X3_LUT_VCOM, vcom, 42);
+  sendCommandDataX3Locked(bus, CMD_X3_LUT_WW,   ww,   42);
+  sendCommandDataX3Locked(bus, CMD_X3_LUT_BW,   bw,   42);
+  sendCommandDataX3Locked(bus, CMD_X3_LUT_WB,   wb,   42);
+  sendCommandDataX3Locked(bus, CMD_X3_LUT_BB,   bb,   42);
 }
 
 void EInkDisplay::loadLutBankX3WithCdi(uint8_t cdi0, uint8_t cdi1,
@@ -791,14 +805,13 @@ void EInkDisplay::loadLutBankX3WithCdi(uint8_t cdi0, uint8_t cdi1,
                                        const uint8_t *ww, const uint8_t *bw,
                                        const uint8_t *wb, const uint8_t *bb) {
   const uint8_t cdiData[2] = {cdi0, cdi1};
-  spi_device_acquire_bus(_spi, portMAX_DELAY);
-  sendCommandDataX3Locked(CMD_X3_VCOM_DATA_INTERVAL, cdiData, 2);
-  sendCommandDataX3Locked(CMD_X3_LUT_VCOM, vcom, 42);
-  sendCommandDataX3Locked(CMD_X3_LUT_WW,   ww,   42);
-  sendCommandDataX3Locked(CMD_X3_LUT_BW,   bw,   42);
-  sendCommandDataX3Locked(CMD_X3_LUT_WB,   wb,   42);
-  sendCommandDataX3Locked(CMD_X3_LUT_BB,   bb,   42);
-  spi_device_release_bus(_spi);
+  SpiBusHold bus(_spi);
+  sendCommandDataX3Locked(bus, CMD_X3_VCOM_DATA_INTERVAL, cdiData, 2);
+  sendCommandDataX3Locked(bus, CMD_X3_LUT_VCOM, vcom, 42);
+  sendCommandDataX3Locked(bus, CMD_X3_LUT_WW,   ww,   42);
+  sendCommandDataX3Locked(bus, CMD_X3_LUT_BW,   bw,   42);
+  sendCommandDataX3Locked(bus, CMD_X3_LUT_WB,   wb,   42);
+  sendCommandDataX3Locked(bus, CMD_X3_LUT_BB,   bb,   42);
 }
 
 void EInkDisplay::triggerRefreshX3(bool turnOffScreen, const char *tag) {
@@ -1040,12 +1053,10 @@ void EInkDisplay::drawImageTransparent(const uint8_t *imageData,
 void EInkDisplay::writeRamBuffer(uint8_t ramBuffer, const uint8_t *data,
                                  uint32_t size) {
   // Hold the bus across the command + bulk data so the SD card cannot
-  // interleave a transaction between the two phases. See
-  // docs/eink-spi-bus-race.md.
-  spi_device_acquire_bus(_spi, portMAX_DELAY);
-  sendCommandLocked(ramBuffer);
-  sendDataLocked(data, static_cast<uint16_t>(size));
-  spi_device_release_bus(_spi);
+  // interleave a transaction between the two phases.
+  SpiBusHold bus(_spi);
+  sendCommandLocked(bus, ramBuffer);
+  sendDataLocked(bus, data, static_cast<uint16_t>(size));
 }
 
 void EInkDisplay::setFramebuffer(const uint8_t *bwBuffer) const {
@@ -1124,11 +1135,12 @@ void EInkDisplay::copyGrayscaleLsbBuffers(const uint8_t *lsbBuffer) {
       memcpy(rowA, rowB, displayWidthBytes);
       memcpy(rowB, rowTmp, displayWidthBytes);
     }
-    spi_device_acquire_bus(_spi, portMAX_DELAY);
-    sendCommandLocked(CMD_X3_DTM1);
-    sendDataLocked(buf, static_cast<uint16_t>(bufferSize));
-    sendCommandLocked(CMD_X3_DATA_STOP); // no refresh follows; commit DTM1
-    spi_device_release_bus(_spi);
+    {
+      SpiBusHold bus(_spi);
+      sendCommandLocked(bus, CMD_X3_DTM1);
+      sendDataLocked(bus, buf, static_cast<uint16_t>(bufferSize));
+      sendCommandLocked(bus, CMD_X3_DATA_STOP); // no refresh follows; commit DTM1
+    }
     for (uint16_t top = 0, bot = displayHeight - 1; top < bot; top++, bot--) {
       uint8_t *rowA = buf + static_cast<uint32_t>(top) * displayWidthBytes;
       uint8_t *rowB = buf + static_cast<uint32_t>(bot) * displayWidthBytes;
@@ -1163,11 +1175,12 @@ void EInkDisplay::copyGrayscaleMsbBuffers(const uint8_t *msbBuffer) {
       memcpy(rowA, rowB, displayWidthBytes);
       memcpy(rowB, rowTmp, displayWidthBytes);
     }
-    spi_device_acquire_bus(_spi, portMAX_DELAY);
-    sendCommandLocked(CMD_X3_DTM2);
-    sendDataLocked(buf, static_cast<uint16_t>(bufferSize));
-    sendCommandLocked(CMD_X3_DATA_STOP); // no refresh follows; commit DTM2
-    spi_device_release_bus(_spi);
+    {
+      SpiBusHold bus(_spi);
+      sendCommandLocked(bus, CMD_X3_DTM2);
+      sendDataLocked(bus, buf, static_cast<uint16_t>(bufferSize));
+      sendCommandLocked(bus, CMD_X3_DATA_STOP); // no refresh follows; commit DTM2
+    }
     for (uint16_t top = 0, bot = displayHeight - 1; top < bot; top++, bot--) {
       uint8_t *rowA = buf + static_cast<uint32_t>(top) * displayWidthBytes;
       uint8_t *rowB = buf + static_cast<uint32_t>(bot) * displayWidthBytes;
@@ -1236,11 +1249,13 @@ void EInkDisplay::writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t *rows,
                             0x01};
     sendCommand(CMD_X3_PARTIAL_IN);
     sendCommandDataX3(CMD_X3_PARTIAL_WINDOW, win, 9);
-    spi_device_acquire_bus(_spi, portMAX_DELAY);
-    sendCommandLocked(ramCmd);
-    for (int r = static_cast<int>(numRows) - 1; r >= 0; r--)
-      sendDataLocked(rows + static_cast<uint32_t>(r) * displayWidthBytes, displayWidthBytes);
-    spi_device_release_bus(_spi);
+    {
+      SpiBusHold bus(_spi);
+      sendCommandLocked(bus, ramCmd);
+      for (int r = static_cast<int>(numRows) - 1; r >= 0; r--)
+        sendDataLocked(bus, rows + static_cast<uint32_t>(r) * displayWidthBytes,
+                       displayWidthBytes);
+    }
     sendCommand(CMD_X3_PARTIAL_OUT);
     // X3 displayGrayBuffer gates on lsbValid; the tiled path bypasses
     // copyGrayscaleLsbBuffers, so mark it when the LSB plane lands.
@@ -1284,14 +1299,15 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t *bwBuffer) {
       memcpy(rowA, rowB, displayWidthBytes);
       memcpy(rowB, rowTmp, displayWidthBytes);
     }
-    spi_device_acquire_bus(_spi, portMAX_DELAY);
-    sendCommandLocked(CMD_X3_DTM2);
-    sendDataLocked(buf, static_cast<uint16_t>(bufferSize));
-    sendCommandLocked(CMD_X3_DATA_STOP); // commit DTM2 -- no refresh follows
-    sendCommandLocked(CMD_X3_DTM1);
-    sendDataLocked(buf, static_cast<uint16_t>(bufferSize));
-    sendCommandLocked(CMD_X3_DATA_STOP); // commit DTM1 -- no refresh follows
-    spi_device_release_bus(_spi);
+    {
+      SpiBusHold bus(_spi);
+      sendCommandLocked(bus, CMD_X3_DTM2);
+      sendDataLocked(bus, buf, static_cast<uint16_t>(bufferSize));
+      sendCommandLocked(bus, CMD_X3_DATA_STOP); // commit DTM2 -- no refresh follows
+      sendCommandLocked(bus, CMD_X3_DTM1);
+      sendDataLocked(bus, buf, static_cast<uint16_t>(bufferSize));
+      sendCommandLocked(bus, CMD_X3_DATA_STOP); // commit DTM1 -- no refresh follows
+    }
     for (uint16_t top = 0, bot = displayHeight - 1; top < bot; top++, bot--) {
       uint8_t *rowA = buf + static_cast<uint32_t>(top) * displayWidthBytes;
       uint8_t *rowB = buf + static_cast<uint32_t>(bot) * displayWidthBytes;

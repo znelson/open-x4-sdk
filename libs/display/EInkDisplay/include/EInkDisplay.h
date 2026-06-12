@@ -143,17 +143,22 @@ class EInkDisplay {
   bool inGrayscaleMode = false;
   bool drawGrayscale = false;
 
+  // RAII hold on the IDF SPI bus mutex; defined in EInkDisplay.cpp. The
+  // *Locked methods take a const-ref as compile-time proof that the caller
+  // holds the bus.
+  class SpiBusHold;
+
   // Low-level display control
   void resetDisplay();
   void sendCommand(uint8_t command);
   void sendData(uint8_t data);
   void sendData(const uint8_t* data, uint16_t length);
-  // Locked variants: caller must hold the SPI bus via spi_device_acquire_bus.
-  // Use these when sending a command + data pair under a single bus
-  // acquisition (e.g. writeRamBuffer). See docs/eink-spi-bus-race.md.
-  void sendCommandLocked(uint8_t command);
-  void sendDataLocked(uint8_t data);
-  void sendDataLocked(const uint8_t* data, uint16_t length);
+  // Locked variants: the SpiBusHold parameter is compile-time proof that the
+  // caller holds the SPI bus. Use these when sending a command + data pair
+  // under a single bus acquisition (e.g. writeRamBuffer).
+  void sendCommandLocked(const SpiBusHold&, uint8_t command);
+  void sendDataLocked(const SpiBusHold&, uint8_t data);
+  void sendDataLocked(const SpiBusHold&, const uint8_t* data, uint16_t length);
   void waitForRefresh(const char* comment = nullptr);
   void waitWhileBusy(const char* comment = nullptr);
   // Shared body for the two waits above. X4 (SSD1677) and X3 (UC81xx-class)
@@ -178,9 +183,11 @@ class EInkDisplay {
   // sendPlaneX3/fillPlaneX3 (separated sendCommand+sendData). Not an
   // atomicity requirement, just convenience.
   void sendCommandDataX3(uint8_t cmd, const uint8_t* data, uint16_t len);
-  // Locked variant: caller must hold the SPI bus via spi_device_acquire_bus.
-  // Keeps CS asserted across the cmd + data pair (true single-burst write).
-  void sendCommandDataX3Locked(uint8_t cmd, const uint8_t* data, uint16_t len);
+  // Locked variant: the SpiBusHold parameter is compile-time proof that the
+  // caller holds the SPI bus. Keeps CS asserted across the cmd + data pair
+  // (true single-burst write).
+  void sendCommandDataX3Locked(const SpiBusHold&, uint8_t cmd,
+                               const uint8_t* data, uint16_t len);
   void sendCommandDataByteX3(uint8_t cmd, uint8_t d0);
   void sendCommandDataByteX3(uint8_t cmd, uint8_t d0, uint8_t d1);
   // Bulk-write a pixel plane to one of the DTM RAM commands. Y-flips rows
