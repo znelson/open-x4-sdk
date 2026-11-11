@@ -359,6 +359,76 @@ const uint8_t lut_x3_bb_gc[] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
+// X3 OEM "AA-pre-BW(mid)" bank — extracted from OEM firmware V5.6.33,
+// update.bin file offset 0x3fe2bc (register-interleaved 0x20..0x24 table).
+// Confirmed by disassembly of its loader at 0x4209af4a: fired inside a PTL
+// partial window (0x91 / 0x90 / 0x92) with CDI 0xA9,0x07 (absolute mode),
+// busy-wait tag "AA-pre-BW(mid)". It is a conditioning pass the OEM runs on
+// a region before its anti-aliased text overlay, NOT a standalone 4-level
+// image mode. All four (DTM1,DTM2) states get an active drive (BB VS=0x10,
+// WW VS=0x20 — gentle per-polarity settle when both planes hold the same BW
+// frame; BW/WB get strong 0xAA/0x55 drives). Used by preconditionGrayscale().
+const uint8_t lut_x3_vcom_aa_pre_bw_mid[] = {
+    0x00, 0x06, 0x03, 0x06, 0x06, 0x01, 0x00, 0x04, 0x01, 0x01, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+const uint8_t lut_x3_ww_aa_pre_bw_mid[] = {
+    0x20, 0x06, 0x03, 0x06, 0x06, 0x01, 0x20, 0x04, 0x01, 0x01, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+const uint8_t lut_x3_bw_aa_pre_bw_mid[] = {
+    0xAA, 0x06, 0x03, 0x06, 0x06, 0x01, 0xA8, 0x04, 0x01, 0x01, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+const uint8_t lut_x3_wb_aa_pre_bw_mid[] = {
+    0x55, 0x06, 0x03, 0x06, 0x06, 0x01, 0x50, 0x04, 0x01, 0x01, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+const uint8_t lut_x3_bb_aa_pre_bw_mid[] = {
+    0x10, 0x06, 0x03, 0x06, 0x06, 0x01, 0x14, 0x04, 0x01, 0x01, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+// X3 OEM AA companion bank — extracted from OEM firmware V5.6.33, update.bin
+// file offset 0x3fe46c (interleaved entry-by-entry with the V5.6.21 GC
+// touch-up bank). Confirmed by disassembly of its loader at 0x4209cab0: this
+// bank is loaded with CDI 0xD7, immediately after the GC bank is loaded with
+// CDI 0x97 — the same 0x97/0xD7 pair the pre-#17 code replicated ("OEM sets
+// CDI 0x97 ... then leaves CDI at 0xD7"). Part of the OEM anti-aliased-text
+// pipeline; this second bank's exact role is not fully reverse-engineered.
+// Multi-phase; 0x8x VS bytes select the second phase group. Unused; kept for
+// reference.
+const uint8_t lut_x3_vcom_aa_pre_bw[] = {
+    0x01, 0x07, 0x01, 0x06, 0x06, 0x01, 0x01, 0x01, 0x06, 0x01, 0x00,
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+const uint8_t lut_x3_ww_aa_pre_bw[] = {
+    0x01, 0x07, 0x81, 0x06, 0x06, 0x01, 0x01, 0x01, 0x06, 0x01, 0x00,
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+const uint8_t lut_x3_bw_aa_pre_bw[] = {
+    0x01, 0x87, 0x81, 0x86, 0x86, 0x01, 0x01, 0x01, 0x86, 0x01, 0x00,
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+const uint8_t lut_x3_wb_aa_pre_bw[] = {
+    0x01, 0x47, 0x41, 0x46, 0x46, 0x01, 0x01, 0x01, 0x46, 0x01, 0x00,
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+const uint8_t lut_x3_bb_aa_pre_bw[] = {
+    0x01, 0x07, 0x01, 0x06, 0x06, 0x01, 0x01, 0x01, 0x06, 0x01, 0x00,
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
 void EInkDisplay::setDisplayDimensions(uint16_t width, uint16_t height) {
   displayWidth = width;
   displayHeight = height;
@@ -1107,6 +1177,10 @@ void EInkDisplay::grayscaleRevert() {
                          lut_x3_bw_half, lut_x3_wb_half, lut_x3_bb_half);
     triggerRefreshX3(/*turnOffScreen=*/false, "(revert)");
     _x3RedRamSynced = true;
+    // Both DTM planes now hold a BW-coded frame (all-white), not grayscale
+    // planes. Clear lsbValid to match, or it stays true forever and forces
+    // displayGrayscaleBase() down the cleanBaseNeeded path every page.
+    _x3GrayState.lsbValid = false;
     return;
   }
 
@@ -1114,6 +1188,106 @@ void EInkDisplay::grayscaleRevert() {
   setCustomLUT(true, lut_grayscale_revert);
   refreshDisplay(FAST_REFRESH);
   setCustomLUT(false);
+}
+
+void EInkDisplay::displayGrayscaleBase(RefreshMode fallback,
+                                       const bool turnOffScreen) {
+  if (!_x3Mode) {
+    displayBuffer(fallback, turnOffScreen);
+    return;
+  }
+  // OEM V5.6.33 grayscale base update (see displayGrayscaleBase in the
+  // header). DTM1 must hold the previously displayed frame for the
+  // differential to be valid; when it does not (post-AA unsynced, boot
+  // full-syncs pending, explicit resync), display normally first and let the
+  // bank fire as a pure settle of the just-displayed frame instead.
+  if (inGrayscaleMode) {
+    // X3 grayscaleRevert scrubs the panel to white and leaves BOTH DTM planes
+    // all-white with _x3RedRamSynced set, so DTM1 matches the displayed state
+    // and the differential below is valid by construction (white-baseline,
+    // the same pattern the full sync uses).
+    grayscaleRevert();
+  }
+  // _x3GrayState.lsbValid means grayscale planes were written over DTM1/DTM2
+  // since the last display — the controller RAM no longer holds the displayed
+  // BW frame even though _x3RedRamSynced may still read true, so the
+  // differential would mis-drive; take the clean fallback path instead.
+  const bool cleanBaseNeeded = !_x3RedRamSynced || _x3GrayState.lsbValid ||
+                               _x3ForceFullSyncNext || _x3InitialFullSyncsRemaining > 0;
+  if (cleanBaseNeeded) {
+    displayBuffer(fallback, /*turnOffScreen=*/false);
+    loadLutBankX3WithCdi(0xA9, 0x07, lut_x3_vcom_aa_pre_bw_mid,
+                         lut_x3_ww_aa_pre_bw_mid, lut_x3_bw_aa_pre_bw_mid,
+                         lut_x3_wb_aa_pre_bw_mid, lut_x3_bb_aa_pre_bw_mid);
+    triggerRefreshX3(turnOffScreen, "(graybase)");
+    return;
+  }
+  sendPlaneX3(CMD_X3_DTM2, frameBuffer, false);
+  loadLutBankX3WithCdi(0xA9, 0x07, lut_x3_vcom_aa_pre_bw_mid,
+                       lut_x3_ww_aa_pre_bw_mid, lut_x3_bw_aa_pre_bw_mid,
+                       lut_x3_wb_aa_pre_bw_mid, lut_x3_bb_aa_pre_bw_mid);
+  triggerRefreshX3(turnOffScreen, "(graybase)");
+  // Keep the invariant that DTM1 mirrors the displayed frame; the grayscale
+  // plane writes that normally follow overwrite both planes anyway.
+  sendPlaneX3(CMD_X3_DTM1, frameBuffer, false);
+  sendCommand(CMD_X3_DATA_STOP);
+  _x3RedRamSynced = true;
+}
+
+void EInkDisplay::preconditionGrayscale() {
+  preconditionGrayscale(0, 0, displayWidth, displayHeight);
+}
+
+void EInkDisplay::preconditionGrayscale(uint16_t x, uint16_t y, uint16_t w,
+                                        uint16_t h) {
+  if (!_x3Mode) {
+    return;
+  }
+  // OEM V5.6.33 "AA-pre-BW(mid)" pass (loader at 0x4209af4a in that binary):
+  // CDI 0xA9,0x07 with the aa_pre_bw_mid bank, fired on the current DTM
+  // contents inside a PTL window over the gray region (PTIN -> window ->
+  // CDI/bank -> refresh -> PTOUT). With DTM1 == DTM2 == the displayed BW
+  // frame, every pixel is in the WW (1,1) or BB (0,0) state and receives a
+  // gentle settle drive (VS 0x20 / 0x10) that loosens it for the grayscale
+  // nudge refresh to follow. PTL Y is in GATE space (logical row y lives at
+  // gate H-1-y, see writeGrayscalePlaneStrip); X is byte-aligned outward
+  // since PTL horizontal resolution is 8 pixels.
+  if (w == 0 || h == 0 || x >= displayWidth || y >= displayHeight) {
+    return;
+  }
+  // The settle is only meaningful (and only safe) when both DTM planes hold
+  // the displayed BW frame. Skip when grayscale planes have been written over
+  // them (lsbValid), a grayscale refresh left the RAM unsynced, or the gray
+  // bank is still loaded — firing the mid bank's strong BW/WB drives against
+  // gray-coded state pairs would corrupt the region.
+  if (inGrayscaleMode || !_x3RedRamSynced || _x3GrayState.lsbValid) {
+    return;
+  }
+  const uint16_t xEndLogical = static_cast<uint16_t>(
+      ((x + w - 1) < (displayWidth - 1)) ? (x + w - 1) : (displayWidth - 1));
+  const uint16_t yEndLogical = static_cast<uint16_t>(
+      ((y + h - 1) < (displayHeight - 1)) ? (y + h - 1) : (displayHeight - 1));
+  const uint16_t xs = static_cast<uint16_t>(x & ~7u);
+  const uint16_t xe = static_cast<uint16_t>(xEndLogical | 7u);
+  const uint16_t gateYStart =
+      static_cast<uint16_t>((displayHeight - 1) - yEndLogical);
+  const uint16_t gateYEnd = static_cast<uint16_t>((displayHeight - 1) - y);
+  const uint8_t win[9] = {static_cast<uint8_t>(xs >> 8),
+                          static_cast<uint8_t>(xs & 0xFF),
+                          static_cast<uint8_t>(xe >> 8),
+                          static_cast<uint8_t>(xe & 0xFF),
+                          static_cast<uint8_t>(gateYStart >> 8),
+                          static_cast<uint8_t>(gateYStart & 0xFF),
+                          static_cast<uint8_t>(gateYEnd >> 8),
+                          static_cast<uint8_t>(gateYEnd & 0xFF),
+                          0x01};
+  sendCommand(CMD_X3_PARTIAL_IN);
+  sendCommandDataX3(CMD_X3_PARTIAL_WINDOW, win, 9);
+  loadLutBankX3WithCdi(0xA9, 0x07, lut_x3_vcom_aa_pre_bw_mid,
+                       lut_x3_ww_aa_pre_bw_mid, lut_x3_bw_aa_pre_bw_mid,
+                       lut_x3_wb_aa_pre_bw_mid, lut_x3_bb_aa_pre_bw_mid);
+  triggerRefreshX3(/*turnOffScreen=*/false, "(precond)");
+  sendCommand(CMD_X3_PARTIAL_OUT);
 }
 
 void EInkDisplay::copyGrayscaleLsbBuffers(const uint8_t *lsbBuffer) {
@@ -1316,6 +1490,11 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t *bwBuffer) {
       memcpy(rowB, rowTmp, displayWidthBytes);
     }
 
+    // Both planes now hold the rebased BW frame, not grayscale planes, so the
+    // next displayGrayscaleBase() can take the differential happy path. This is
+    // the per-page cleanup the tiled AA reader path runs, so leaving lsbValid
+    // true here is what pins cleanBaseNeeded on in steady state.
+    _x3GrayState.lsbValid = false;
     _x3RedRamSynced = true;
     _x3ForceFullSyncNext = false;
     _x3ForcedConditionPassesNext = 0;
@@ -1470,6 +1649,13 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     // Sync DTM1 ("old" RAM) with non-inverted current frame for next fast diff.
     sendPlaneX3(CMD_X3_DTM1, frameBuffer, false);
     sendCommand(CMD_X3_DATA_STOP); // commit DTM1 — no refresh follows
+    // A completed BW refresh leaves both DTM planes holding a BW frame, not
+    // grayscale planes, so the next displayGrayscaleBase() can take the
+    // differential happy path. Clear lsbValid to reflect that — otherwise it
+    // stays true after any grayscale page and forces the clean-base fallback
+    // forever (e.g. the periodic full-refresh path that calls displayBuffer()
+    // directly).
+    _x3GrayState.lsbValid = false;
     _x3RedRamSynced = true;
 
     // The first differential after a full garbles on X3: the controller's post-full state corrupts
